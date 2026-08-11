@@ -53,6 +53,17 @@ app = dash.Dash(
     title="GAIG - Rally AI Adoption Dashboard",
 )
 
+server = app.server  # exposes the underlying Flask app so gunicorn can run it
+
+# Simple login gate so the hosted URL isn't open to anyone who finds it —
+# the dashboard shows individual ownership data. Set these two as
+# environment variables on Render; if unset, no login is enforced.
+_dash_user = os.getenv("DASHBOARD_USERNAME")
+_dash_pass = os.getenv("DASHBOARD_PASSWORD")
+if _dash_user and _dash_pass:
+    import dash_auth
+    dash_auth.BasicAuth(app, {_dash_user: _dash_pass})
+
 TREND_ARROWS = {"up": "▲", "down": "▼", "flat": "▬", None: "–"}
 TREND_COLORS = {"up": "#2e7d32", "down": "#c62828", "flat": "#757575", None: "#9e9e9e"}
 
