@@ -17,6 +17,11 @@ Freshness against Rally is handled two ways, both optional/independent:
      callback every dashboard.auto_refresh_seconds, so once new data lands
      in the cache (from #1, or from a manual/cron run of
      scripts/run_sync.py) it shows up without a manual page reload.
+     This same timer also re-populates the Project/Owner/Program dropdown
+     OPTIONS (see refresh_filter_options below) — otherwise a browser that
+     loads the page while the cache is still empty (e.g. right after a
+     fresh deploy, before the first background sync finishes) would be
+     stuck with empty dropdowns until a manual page reload.
 """
 
 from __future__ import annotations
@@ -571,6 +576,30 @@ def refresh_dashboard(projects, selected_programs, owners, date_start, date_end,
     lb_records = lb.to_dict("records") if not lb.empty else []
 
     return cards, sync_note, split_fig, trend_fig, proj_fig, lb_records
+
+
+@app.callback(
+    Output("filter-projects", "options"),
+    Output("filter-owners", "options"),
+    Output("filter-programs", "options"),
+    Input("auto-refresh-interval", "n_intervals"),
+)
+def refresh_filter_options(_n_intervals):
+    """Keeps the Project(s)/Owner(s)/Program(s) dropdown OPTIONS in sync with
+    the cache on the same timer as everything else. Without this, a browser
+    that loads the page while the cache is still empty (e.g. right after a
+    fresh deploy, before the first background sync finishes) would be stuck
+    with empty dropdowns until someone manually reloads the page — this makes
+    that self-correct within one refresh cycle instead."""
+    df = metrics.load_dataframe(db)
+    projects = sorted(df["project"].dropna().unique().tolist()) if not df.empty else []
+    owners = sorted(df["owner"].dropna().unique().tolist()) if not df.empty else []
+    programs = sorted(settings.programs.keys())
+    return (
+        [{"label": p, "value": p} for p in projects],
+        [{"label": o, "value": o} for o in owners],
+        [{"label": p, "value": p} for p in programs],
+    )
 
 
 def _summary_card(title, value, color, subtitle=""):
