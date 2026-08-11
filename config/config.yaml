@@ -1,0 +1,118 @@
+# =============================================================================
+# GAIG - Rally AI-Adoption Dashboard — Configuration
+# =============================================================================
+# Edit this file to point the dashboard at your Rally workspace and to keep
+# the tag taxonomy up to date as your org's tagging conventions evolve.
+# No code changes should ever be required to add/rename a tag.
+# =============================================================================
+
+rally:
+  base_url: "https://rally1.rallydev.com/slm/webservice/v2.0/"
+  # Rally Workspace ObjectID (NOT the workspace name). Find it via:
+  #   GET /workspace.js  (with your API key)
+  workspace_id: "45606719805"
+  page_size: 200          # Rally max is generally 200 per WSAPI page
+  request_timeout_secs: 30
+  max_retries: 5
+  backoff_base_secs: 1.5  # exponential backoff: base * 2^attempt
+
+  # Fields pulled for every TestCase. "Owner" is used as the creator proxy
+  # since standard Rally TestCase objects do not expose a separate
+  # "Creator" field the way HierarchicalRequirement/Defect sometimes do in
+  # custom configs. If your org has a custom "c_Creator" field, add it here
+  # and update src/rally_client.py's OWNER_FIELD accordingly.
+  fields:
+    - FormattedID
+    - Name
+    - Tags
+    - Owner
+    - Project
+    - Workspace
+    - CreationDate
+    - LastUpdateDate
+
+# -----------------------------------------------------------------------------
+# Tag classification rules
+# -----------------------------------------------------------------------------
+# Matching is case-insensitive and trims whitespace/hyphens/underscores so
+# "AI Assisted", "ai-assisted", "AI_ASSISTED" all match the same rule.
+# Add as many variants as you discover in your org; order does not matter.
+# First category whose patterns match wins. Anything matching none of the
+# categories below falls into "Unclassified" and is excluded from AI-adoption
+# denominators by default (configurable via classification.count_unclassified_as_manual).
+# -----------------------------------------------------------------------------
+classification:
+  count_unclassified_as_manual: false   # if true, unclassified tags count as "Manual" in denominators
+
+  categories:
+    AI-Assisted:
+      - "ai-assisted"
+      - "ai assisted"
+      - "ai-generated"
+      - "ai generated"
+      - "genai"
+      - "gen-ai"
+      - "copilot-generated"
+      - "llm-generated"
+      - "ai-authored"
+      - "chatgpt-generated"
+
+    Manual:
+      - "manual"
+      - "manually-created"
+      - "manually created"
+      - "human-authored"
+      - "human-written"
+      - "no-ai"
+# -----------------------------------------------------------------------------
+# Programs — group multiple Rally projects under one umbrella name for
+# filtering. Edit this freely; the dashboard picks up new programs on the
+# next restart, no code changes needed.
+# -----------------------------------------------------------------------------
+programs:
+  Claims:
+    - "CC Core Blue"
+    - "CC Core Red"
+    - "CC Core White"
+    - "AutoPilot"
+    - "Cloud Migration"
+  # Add more programs here, e.g.:
+  # Underwriting:
+  #   - "UW Core"
+  #   - "UW Portal"
+# -----------------------------------------------------------------------------
+# Leaderboard defaults (overridable from the UI at runtime)
+# -----------------------------------------------------------------------------
+leaderboard:
+  min_test_case_count: 10   # minimum volume to qualify for the % leaderboard
+  default_rank_mode: "pct"  # "pct" or "count"
+  trend_period: "weekly"    # "weekly" or "monthly" — used for trend arrows & trend chart
+
+# -----------------------------------------------------------------------------
+# Sync / caching behavior
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Sync / caching behavior
+# -----------------------------------------------------------------------------
+sync:
+  sqlite_path: "data/rally_cache.db"
+  full_sync_lookback_days: 730   # bound on first full sync so it doesn't pull the entire history unbounded
+
+  # In-process background sync, run by the Dash app itself (src/app.py) via
+  # APScheduler. Set enabled: false to go back to external cron/Task
+  # Scheduler only (scripts/run_sync.py). Safe to run both — the sync
+  # watermark logic (see src/sync_service.py) makes concurrent/overlapping
+  # runs harmless, just redundant.
+  auto_sync:
+    enabled: true
+    interval_minutes: 15
+
+# -----------------------------------------------------------------------------
+# Dashboard UI behavior
+# -----------------------------------------------------------------------------
+dashboard:
+  # How often the browser polls for fresh data (re-runs the chart/leaderboard
+  # callback) without a manual page reload. This just re-reads the local
+  # SQLite cache — it does NOT call Rally. Cache freshness is controlled by
+  # sync.auto_sync.interval_minutes above.
+  auto_refresh_seconds: 60
