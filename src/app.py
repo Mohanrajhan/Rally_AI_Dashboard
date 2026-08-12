@@ -97,8 +97,8 @@ def dataframe_to_pdf_bytes(df: pd.DataFrame, title: str) -> bytes:
 LEADERBOARD_EXPORT_COLUMNS = ["rank", "owner", "total", "ai_assisted", "manual", "ai_adoption_pct", "program", "project"]
 LEADERBOARD_EXPORT_HEADERS = ["Rank", "Owner", "Total Test Cases", "AI-Assisted", "Manual", "AI Adoption %", "Program", "Project"]
 
-DRILLDOWN_EXPORT_COLUMNS = ["formatted_id", "name", "owner", "project", "category", "tags_display", "creation_date"]
-DRILLDOWN_EXPORT_HEADERS = ["Formatted ID", "Name", "Owner", "Project", "Category", "Tags", "Created"]
+DRILLDOWN_EXPORT_COLUMNS = ["formatted_id", "name", "owner", "project", "category", "tags_display", "creation_date", "last_executed_display", "execution_count"]
+DRILLDOWN_EXPORT_HEADERS = ["Formatted ID", "Name", "Owner", "Project", "Category", "Tags", "Created", "Last Executed", "Executions"]
 
 
 # ==========================================================================
@@ -250,7 +250,7 @@ def build_layout():
                                         html.Label("Date range (Created)"),
                                         dcc.DatePickerRange(id="filter-date-range"),
                                     ],
-                                    width=6,
+                                    width=4,
                                 ),
                                 dbc.Col(
                                     [
@@ -267,7 +267,20 @@ def build_layout():
                                             clearable=False,
                                         ),
                                     ],
-                                    width=6,
+                                    width=4,
+                                ),
+                                dbc.Col(
+                                    [
+                                        html.Label("Test Case Execution date range (optional)"),
+                                        dcc.DatePickerRange(id="filter-exec-date-range"),
+                                        dbc.Checklist(
+                                            id="filter-only-executed",
+                                            options=[{"label": " Only show executed test cases", "value": "executed"}],
+                                            value=[],
+                                            className="mt-1 small",
+                                        ),
+                                    ],
+                                    width=4,
                                 ),
                             ]
                         ),
@@ -409,6 +422,8 @@ def build_layout():
                                 {"name": "Category", "id": "category"},
                                 {"name": "Tags", "id": "tags_display"},
                                 {"name": "Created", "id": "creation_date"},
+                                {"name": "Last Executed", "id": "last_executed_display"},
+                                {"name": "Executions", "id": "execution_count"},
                             ],
                             page_size=10,
                             sort_action="native",
@@ -423,6 +438,8 @@ def build_layout():
                                 {"if": {"column_id": "owner"}, "minWidth": "160px", "width": "180px"},
                                 {"if": {"column_id": "project"}, "minWidth": "160px", "width": "200px"},
                                 {"if": {"column_id": "creation_date"}, "minWidth": "100px", "width": "100px"},
+                                {"if": {"column_id": "last_executed_display"}, "minWidth": "120px", "width": "120px"},
+                                {"if": {"column_id": "execution_count"}, "minWidth": "100px", "width": "100px"},
                             ],
                             style_header={"fontWeight": "bold"},
                         ),
@@ -476,10 +493,15 @@ app.layout = build_layout
     Input("filter-category", "value"),
     Input("rank-mode", "value"),
     Input("min-count", "value"),
+    Input("filter-exec-date-range", "start_date"),
+    Input("filter-exec-date-range", "end_date"),
+    Input("filter-only-executed", "value"),
     Input("auto-refresh-interval", "n_intervals"),
 )
-def refresh_dashboard(projects, selected_programs, owners, date_start, date_end, category, rank_mode, min_count, _n_intervals):
+def refresh_dashboard(projects, selected_programs, owners, date_start, date_end, category, rank_mode, min_count,
+                       exec_start, exec_end, only_executed_value, _n_intervals):
     df = metrics.load_dataframe(db)
+    results_df = metrics.load_results_dataframe(db)
 
     # Program narrows to its projects (auto-expanded to include real Rally
     # sub-projects); an explicit Project pick narrows further WITHIN that
@@ -490,6 +512,11 @@ def refresh_dashboard(projects, selected_programs, owners, date_start, date_end,
     effective_projects = metrics.combine_project_filters(projects, program_projects)
 
     filtered = metrics.apply_filters(df, effective_projects, date_start, date_end, category, owners=owners)
+    filtered = metrics.apply_execution_filter(
+        filtered, results_df,
+        only_executed=bool(only_executed_value),
+        exec_start=exec_start, exec_end=exec_end,
+    )
 
     # --- summary cards ---
     s = metrics.summary_cards(filtered)
@@ -636,16 +663,47 @@ def toggle_select_all(_select_clicks, _clear_clicks, rows):
     Output("drilldown-table", "data"),
     Input("leaderboard-table", "derived_virtual_selected_rows"),
     State("leaderboard-table", "derived_virtual_data"),
+    State("filter-projects", "value"),
+    State("filter-programs", "value"),
+    State("filter-date-range", "start_date"),
+    State("filter-date-range", "end_date"),
+    State("filter-category", "value"),
+    State("filter-exec-date-range", "start_date"),
+    State("filter-exec-date-range", "end_date"),
+    State("filter-only-executed", "value"),
 )
-def drilldown(selected_rows, table_data):
+def drilldown(selected_rows, table_data, projects, selected_programs, date_start, date_end, category,
+              exec_start, exec_end, only_executed_value):
     if not selected_rows or not table_data:
         return "Select one or more owners above to drill in", []
 
     owners = [table_data[i]["owner"] for i in selected_rows]
     df = metrics.load_dataframe(db)
-    owner_df = df[df["owner"].isin(owners)].copy()
+    results_df = metrics.load_results_dataframe(db)
+
+    # Apply the SAME scope as the leaderboard (Program/Project/Date/Category/
+    # execution filters) before narrowing to the selected owners — otherwise
+    # the drill-down shows an owner's ENTIRE history regardless of what's
+    # currently filtered on screen, which is what caused the 987-vs-69 gap.
+    hierarchy_rows = db.get_project_hierarchy()
+    children_map = metrics.build_descendant_map(hierarchy_rows)
+    program_projects = metrics.resolve_program_projects(settings.programs, selected_programs, children_map)
+    effective_projects = metrics.combine_project_filters(projects, program_projects)
+
+    scoped_df = metrics.apply_filters(df, effective_projects, date_start, date_end, category, owners=owners)
+    scoped_df = metrics.apply_execution_filter(
+        scoped_df, results_df,
+        only_executed=bool(only_executed_value),
+        exec_start=exec_start, exec_end=exec_end,
+    )
+
+    owner_df = scoped_df.copy()
+    owner_df = metrics.merge_last_executed(owner_df, results_df)
     owner_df["tags_display"] = owner_df["tags"].apply(lambda t: ", ".join(t) if t else "")
     owner_df["creation_date"] = owner_df["creation_date"].dt.strftime("%Y-%m-%d")
+    owner_df["last_executed_display"] = owner_df["last_executed"].apply(
+        lambda d: d.strftime("%Y-%m-%d") if pd.notnull(d) else "Never"
+    )
 
     return f"Test Cases owned by Selected User/Users ({len(owner_df)})", owner_df.to_dict("records")
 

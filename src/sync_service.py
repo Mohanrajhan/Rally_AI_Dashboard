@@ -77,6 +77,16 @@ class SyncService:
         categories = {r.formatted_id: self.classifier.classify(r.tags) for r in records}
         self.db.upsert_test_cases(records, categories)
 
+        # Test case EXECUTIONS (TestCaseResult) — separate object type,
+        # separate incremental window, same watermark logic.
+        result_records = list(
+            self.client.iter_test_case_results(
+                workspace_id=self.workspace_id,
+                updated_since=updated_since,
+            )
+        )
+        self.db.upsert_test_case_results(result_records)
+
         # only advance the watermark once everything above succeeded
         self.db.set_last_sync(self.workspace_id, started_at.isoformat())
 
@@ -84,6 +94,7 @@ class SyncService:
             "mode": mode,
             "records_synced": len(records),
             "projects_synced": len(projects),
+            "results_synced": len(result_records),
             "ai_assisted": sum(1 for c in categories.values() if c == "AI-Assisted"),
             "manual": sum(1 for c in categories.values() if c == "Manual"),
             "unclassified": sum(1 for c in categories.values() if c == "Unclassified"),

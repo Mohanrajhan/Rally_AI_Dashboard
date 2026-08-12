@@ -53,6 +53,18 @@ CREATE TABLE IF NOT EXISTS projects (
     synced_at    TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_projects_parent ON projects(parent_name);
+
+CREATE TABLE IF NOT EXISTS test_case_results (
+    result_object_id        TEXT PRIMARY KEY,
+    test_case_formatted_id  TEXT,
+    execution_date          TEXT,
+    verdict                 TEXT,
+    tester                  TEXT,
+    build                   TEXT,
+    synced_at               TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_results_tc ON test_case_results(test_case_formatted_id);
+CREATE INDEX IF NOT EXISTS idx_results_date ON test_case_results(execution_date);
 """
 
 
@@ -177,4 +189,39 @@ class Database:
     def get_project_hierarchy(self) -> list[dict]:
         with self._conn() as conn:
             cur = conn.execute("SELECT name, parent_name FROM projects")
+            return [dict(row) for row in cur.fetchall()]
+        
+    # ------------------------------------------------------------------
+    # test_case_results — actual test EXECUTIONS, distinct from the
+    # TestCase definitions in the `test_cases` table above.
+    # ------------------------------------------------------------------
+    def upsert_test_case_results(self, records) -> None:
+        rows = [
+            (
+                r.result_object_id, r.test_case_formatted_id, r.execution_date,
+                r.verdict, r.tester, r.build,
+            )
+            for r in records
+        ]
+        with self._conn() as conn:
+            conn.executemany(
+                """
+                INSERT INTO test_case_results (
+                    result_object_id, test_case_formatted_id, execution_date,
+                    verdict, tester, build, synced_at
+                ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(result_object_id) DO UPDATE SET
+                    test_case_formatted_id=excluded.test_case_formatted_id,
+                    execution_date=excluded.execution_date,
+                    verdict=excluded.verdict,
+                    tester=excluded.tester,
+                    build=excluded.build,
+                    synced_at=datetime('now')
+                """,
+                rows,
+            )
+
+    def fetch_all_results(self) -> list[dict]:
+        with self._conn() as conn:
+            cur = conn.execute("SELECT * FROM test_case_results")
             return [dict(row) for row in cur.fetchall()]

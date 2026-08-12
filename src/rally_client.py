@@ -50,6 +50,15 @@ class TestCaseRecord:
     last_update_date: Optional[str]
     raw: dict = field(default_factory=dict, repr=False)
 
+@dataclass
+class TestCaseResultRecord:
+    result_object_id: str
+    test_case_formatted_id: Optional[str]
+    execution_date: Optional[str]
+    verdict: Optional[str]
+    tester: Optional[str]
+    build: Optional[str]
+
 
 class RallyApiError(RuntimeError):
     pass
@@ -254,6 +263,72 @@ class RallyClient:
             start += self.page_size
             logger.info("Fetched %d/%d test cases (workspace=%s, project=%s)",
                         fetched, total, workspace_id, project_id or "ALL")
+
+    def iter_test_case_results(
+        self,
+        workspace_id: str,
+        updated_since: Optional[datetime] = None,
+    ) -> Iterator[TestCaseResultRecord]:
+        """
+        Yield every TestCaseResult (an actual test EXECUTION, not the test
+        case definition itself) in the workspace. A single TestCase can have
+        many TestCaseResult records over time — one per run.
+        """
+        fetch = ",".join([
+            "ObjectID", "TestCase.FormattedID", "TestCase.Name",
+            "Date", "Verdict", "Tester", "Build",
+            "CreationDate", "LastUpdateDate",
+        ])
+        params = {
+            "workspace": self.get_workspace_ref(workspace_id),
+            "fetch": fetch,
+            "pagesize": self.page_size,
+            "start": 1,
+            "order": "Date ASC",
+            "projectScopeUp": "true",
+            "projectScopeDown": "true",
+        }
+        if updated_since:
+            ts = updated_since.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            params["query"] = f"(Date >= {ts})"
+
+        start = 1
+        total = None
+        fetched = 0
+        while total is None or start <= total:
+            params["start"] = start
+            data = self._get("testcaseresult", params)
+            result = data.get("QueryResult", {})
+            errors = result.get("Errors") or []
+            if errors:
+                raise RallyApiError(f"Rally query errors: {errors}")
+
+            total = result.get("TotalResultCount", 0)
+            results = result.get("Results", [])
+            if not results:
+                break
+
+            for r in results:
+                yield self._to_result_record(r)
+
+            fetched += len(results)
+            start += self.page_size
+            logger.info("Fetched %d/%d test case results (workspace=%s)",
+                        fetched, total, workspace_id)
+
+    @staticmethod
+    def _to_result_record(r: dict) -> TestCaseResultRecord:
+        testcase_ref = r.get("TestCase") or {}
+        tester = r.get("Tester") or {}
+        return TestCaseResultRecord(
+            result_object_id=str(r.get("ObjectID")),
+            test_case_formatted_id=testcase_ref.get("FormattedID"),
+            execution_date=r.get("Date"),
+            verdict=r.get("Verdict"),
+            tester=tester.get("_refObjectName"),
+            build=r.get("Build"),
+        )
+
 
     @staticmethod
     def _to_record(tc: dict) -> TestCaseRecord:

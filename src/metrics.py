@@ -26,6 +26,64 @@ def load_dataframe(db) -> pd.DataFrame:
     df["is_ai_assisted"] = df["category"] == "AI-Assisted"
     return df
 
+def load_results_dataframe(db) -> pd.DataFrame:
+    rows = db.fetch_all_results()
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    df["execution_date"] = pd.to_datetime(df["execution_date"], utc=True, errors="coerce")
+    return df
+
+
+def apply_execution_filter(
+    df: pd.DataFrame,
+    results_df: pd.DataFrame,
+    only_executed: bool = False,
+    exec_start=None,
+    exec_end=None,
+) -> pd.DataFrame:
+    """Narrow test cases down to only those with a qualifying execution.
+
+    - only_executed=True with no dates: keep test cases executed at least
+      once, ever.
+    - exec_start/exec_end set: keep test cases with at least one execution
+      inside that window (implies only_executed).
+    """
+    if df.empty or (not only_executed and exec_start is None and exec_end is None):
+        return df
+    if results_df.empty:
+        return df.iloc[0:0]  # nothing has been executed at all
+
+    r = results_df
+    if exec_start is not None:
+        r = r[r["execution_date"] >= pd.Timestamp(exec_start, tz="UTC")]
+    if exec_end is not None:
+        end_of_day = pd.Timestamp(exec_end, tz="UTC") + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+        r = r[r["execution_date"] <= end_of_day]
+
+    executed_ids = set(r["test_case_formatted_id"].dropna().unique())
+    return df[df["formatted_id"].isin(executed_ids)]
+
+
+def merge_last_executed(df: pd.DataFrame, results_df: pd.DataFrame) -> pd.DataFrame:
+    """Adds 'last_executed' and 'execution_count' columns to a test-case
+    DataFrame, for display in the drill-down table."""
+    if df.empty:
+        return df
+    out = df.copy()
+    if results_df.empty:
+        out["last_executed"] = None
+        out["execution_count"] = 0
+        return out
+
+    agg = results_df.groupby("test_case_formatted_id").agg(
+        last_executed=("execution_date", "max"),
+        execution_count=("result_object_id", "count"),
+    ).reset_index().rename(columns={"test_case_formatted_id": "formatted_id"})
+
+    out = out.merge(agg, on="formatted_id", how="left")
+    out["execution_count"] = out["execution_count"].fillna(0).astype(int)
+    return out
 
 def apply_filters(
     df: pd.DataFrame,
